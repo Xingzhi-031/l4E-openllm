@@ -1,4 +1,7 @@
+import sys
 import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import json
 import re
 
@@ -17,11 +20,15 @@ from concurrent.futures import ThreadPoolExecutor, as_completed, FIRST_COMPLETED
 
 from sanitize.sanitize import sanitize
 from tools.data import get_evalperf_data, get_human_eval_plus, get_mbpp_plus
+# 项目根目录（适配 Windows 路径）
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 class CodeGenerator:
     def __init__(self,model):
         self.failed_tasks = {}  # 初始化为字典
         self.lock = threading.Lock()  # 添加锁
-        self.casegentor = CaseGenerator(problems="../dataset/enamel.csv")
+        enamel_path = os.path.join(BASE_DIR, "dataset", "enamel.csv")
+        self.casegentor = CaseGenerator(problems=enamel_path)
         self.results_lock = threading.Lock()
         self.results = {}
         self.multithinking = MultiThinking(model)
@@ -1796,16 +1803,18 @@ def get_data(dataset):
         dataset_dict = {k: original_dataset[k] for k in get_evalperf_data()}
         # assert id_range is None, "id_range not supported for evalperf"
     elif dataset == "Mercury":
-        dataset_dict = datasets.load_dataset("parquet", data_files="/Users/tlif3./Desktop/all/zju_research/llm_codegeneration/code_gen_1106/dataset/Mercury/eval-00000-of-00001.parquet", split="train")
+        mercury_path = os.path.join(BASE_DIR, "dataset", "Mercury", "eval-00000-of-00001.parquet")
+        dataset_dict = datasets.load_dataset("parquet", data_files=mercury_path, split="train")
         return [{example["slug_name"]:dict(example)} for example in dataset_dict]
     else:
         raise ValueError(f"Invalid dataset {dataset}")
     dataset_list = [{key: value} for key, value in dataset_dict.items()]
     return dataset_list
 
-model_name = ["deepseek-coder"]
+model_name = ["Qwen/Qwen3.5-9B"]
 for i in model_name:
     print(f"当前执行为第{i}轮")
-    prom_data = get_data("humaneval")
+    prom_data = get_data("humaneval")[:2]   # 只跑前 2 道题（测试用）
     codegenerator = CodeGenerator(i)
-    codegenerator.threading_execution(i, f"enamel_0125_1", "humaneval", prom_data)  # 批量生成生成
+    # codegenerator.threading_execution(i, f"enamel_0125_1", "humaneval", prom_data)  # 批量生成生成
+    codegenerator.threading_execution(i, f"qwen35_9b_2", "humaneval", prom_data)  # 批量生成，结果文件名带 qwen35_9b_2

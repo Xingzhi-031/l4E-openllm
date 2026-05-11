@@ -2,7 +2,10 @@ import argparse
 import os, os.path as osp
 import gc
 import sys
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 import concurrent.futures
 import time
 import platform
@@ -27,29 +30,17 @@ def get_memory_usage():
 @contextlib.contextmanager
 def set_memory_limit(maximum_memory_bytes=None):
     try:
-        if maximum_memory_bytes is not None:
+        if maximum_memory_bytes is not None and resource is not None:
             _rlimit_data = resource.getrlimit(resource.RLIMIT_DATA)
-
             current_memory_usage = get_memory_usage()
             memory_limit = int(current_memory_usage + maximum_memory_bytes)
-
-            # 获取系统允许的最大内存限制
             max_allowed_memory = _rlimit_data[1]
-
-            print(f"System maximum memory limit: {max_allowed_memory} bytes")
-            print(f"Current RLIMIT_DATA: {_rlimit_data}")
-
-            # 如果 memory_limit 超过系统允许的最大内存限制，则使用系统的最大值
             if memory_limit > max_allowed_memory:
-                print(
-                    f"Requested memory limit ({memory_limit} bytes) exceeds system maximum ({max_allowed_memory} bytes). Using system maximum.")
                 memory_limit = max_allowed_memory
-
-            print(f"Setting memory limit to: {memory_limit} bytes")
             resource.setrlimit(resource.RLIMIT_DATA, (memory_limit, _rlimit_data[1]))
         yield
     finally:
-        if maximum_memory_bytes is not None:
+        if maximum_memory_bytes is not None and resource is not None:
             resource.setrlimit(resource.RLIMIT_DATA, _rlimit_data)
 
 class TimeoutException(Exception):

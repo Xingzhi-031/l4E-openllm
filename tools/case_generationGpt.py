@@ -1,5 +1,6 @@
 import threading
 import traceback
+import time
 from typing import List
 
 from prompt.prompt import caseGen
@@ -8,9 +9,11 @@ from gpt.gpt_reply import GPTReply
 from execute import *
 import subprocess
 import tempfile
-import resource
+try:
+    import resource
+except ImportError:
+    resource = None
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 class CaseGenerator:
     TPL_MAKE = '''%s
     %s
@@ -511,7 +514,7 @@ __accepted = __check(__input, __answer, __output)
 
     def time_extractor(self,file_content):
         # stats_compile = re.compile("simSeconds\s+(.*?)\s+# Number o", re.DOTALL)
-        pattern = re.compile("simSeconds\s+(.*?)\s+# Number o", re.DOTALL)
+        pattern = re.compile(r"simSeconds\s+(.*?)\s+# Number o", re.DOTALL)
         result = re.findall(pattern,file_content)
         return result
 
@@ -616,15 +619,14 @@ __accepted = __check(__input, __answer, __output)
                 temp_file.flush()
                 temp_file_path = temp_file.name
                 try:
-                    usage_start = resource.getrusage(resource.RUSAGE_SELF)
+                    time_start = time.time()
                     result = subprocess.run(
                         ["python", temp_file_path],
                         capture_output=True,
                         text=True,
                         timeout=1
                     )
-                    usage_end = resource.getrusage(resource.RUSAGE_SELF)
-                    user_time = usage_end.ru_utime - usage_start.ru_utime
+                    user_time = time.time() - time_start
                     test_result = f"This is the execution output:{result.stdout}" if result.returncode == 0 else f"This is the execution output:{result.stdout}"+f"This is the error output:{result.stderr}"
                     if "Error" in test_result:
                         return False, f"This is the wrong execution output:{result.stdout}"
@@ -712,15 +714,14 @@ __accepted = __check(__input, __answer, __output)
                 temp_file.flush()
                 temp_file_path = temp_file.name
                 try:
-                    usage_start = resource.getrusage(resource.RUSAGE_SELF)
+                    time_start = time.time()
                     result = subprocess.run(
                         ["python", temp_file_path],
                         capture_output=True,
                         text=True,
                         timeout=10
                     )
-                    usage_end = resource.getrusage(resource.RUSAGE_SELF)
-                    user_time = usage_end.ru_utime - usage_start.ru_utime
+                    user_time = time.time() - time_start
                     test_result = f"This is the execution output:{result.stdout}" if result.returncode == 0 else f"This is the execution output:{result.stdout}"+f"This is the error output:{result.stderr}"
                     if "Error" in test_result:
                         return False, f"This is the wrong execution output:{test_result}"
