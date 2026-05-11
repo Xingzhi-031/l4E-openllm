@@ -13,12 +13,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--csv",
-        default="/content/enacls/dataset/enamel.csv",
+        default="enamel.csv",
         help="Path to ENAMEL csv file.",
     )
     parser.add_argument(
         "--output",
-        default="/content/CLS/enamel_openllm_input.json",
+        default="enamel_openllm_input.json",
         help="Output JSON path for tools/open_llm_generation.py",
     )
     parser.add_argument(
