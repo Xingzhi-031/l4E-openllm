@@ -38,6 +38,9 @@ def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
 
     if target_def in code:
         normalized = code[code.rfind(target_def) :].strip()
+    elif re.search(r"^\s*def\s+[A-Za-z_]\w*\s*\(", code, flags=re.M):
+        # If the model already returned full function code, keep it as-is.
+        normalized = code.strip()
     else:
         body = textwrap.dedent(code).strip("\n")
         indented = "\n".join(("    " + ln) if ln.strip() else "" for ln in body.splitlines())
