@@ -30,18 +30,90 @@ def extract_code_block(text: str) -> str:
     return text.strip()
 
 
+def _strip_docstring_body(body: list[ast.stmt]) -> list[ast.stmt]:
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(getattr(body[0], "value", None), ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        return body[1:]
+    return body
+
+
+def _function_score(fn: ast.FunctionDef) -> int:
+    body = _strip_docstring_body(fn.body[:])
+    if not body:
+        return 0
+    score = 0
+    module = ast.Module(body=body, type_ignores=[])
+    for node in ast.walk(module):
+        if isinstance(
+            node,
+            (
+                ast.Return,
+                ast.For,
+                ast.While,
+                ast.If,
+                ast.Assign,
+                ast.AugAssign,
+                ast.Call,
+                ast.Try,
+                ast.With,
+                ast.Raise,
+                ast.Assert,
+            ),
+        ):
+            score += 1
+    return score
+
+
 def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
     completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
     code = extract_code_block(completion)
     prompt = prompt.rstrip("\n")
     target_def = f"def {entry_point}("
 
-    if target_def in code:
-        normalized = code[code.rfind(target_def) :].strip()
-    elif re.search(r"^\s*def\s+[A-Za-z_]\w*\s*\(", code, flags=re.M):
-        # If the model already returned full function code, keep it as-is.
-        normalized = code.strip()
-    else:
+    normalized = ""
+    wrapped = False
+
+    try:
+        tree = ast.parse(code)
+        funcs = [node for node in tree.body if isinstance(node, ast.FunctionDef)]
+        target_funcs = [fn for fn in funcs if fn.name == entry_point]
+
+        if target_funcs:
+            best_target = max(target_funcs, key=_function_score)
+            normalized = ast.unparse(best_target).strip()
+        elif funcs:
+            # Keep the strongest function and add wrapper to expected entry point.
+            best_fn = max(funcs, key=_function_score)
+            best_name = best_fn.name
+            best_src = ast.unparse(best_fn).strip()
+            wrapper = (
+                f"\n\ndef {entry_point}(*args, **kwargs):\n"
+                f"    return {best_name}(*args, **kwargs)\n"
+            )
+            normalized = (best_src + wrapper).strip()
+            wrapped = True
+    except Exception:
+        normalized = ""
+
+    if not normalized:
+        if target_def in code:
+            normalized = code[code.rfind(target_def) :].strip()
+        elif re.search(r"^\s*def\s+[A-Za-z_]\w*\s*\(", code, flags=re.M):
+            normalized = code.strip()
+        else:
+            body = textwrap.dedent(code).strip("\n")
+            indented = "\n".join(("    " + ln) if ln.strip() else "" for ln in body.splitlines())
+            normalized = prompt if not indented else (prompt + "\n" + indented)
+
+    if wrapped:
+        # keep marker for debug (no side effect on execution)
+        normalized = normalized + "\n"
+
+    if not normalized:
         body = textwrap.dedent(code).strip("\n")
         indented = "\n".join(("    " + ln) if ln.strip() else "" for ln in body.splitlines())
         normalized = prompt if not indented else (prompt + "\n" + indented)
@@ -80,6 +152,8 @@ def main() -> None:
 
     samples: dict[str, list[str]] = {}
     missing_completion = 0
+    wrapped_count = 0
+    prompt_fallback_count = 0
 
     for item in rows:
         pid = int(item["problem_id"])
@@ -89,6 +163,11 @@ def main() -> None:
         if not completion:
             missing_completion += 1
         code = normalize_solution(prompt=prompt, entry_point=entry_point, completion=completion)
+        if f"def {entry_point}(*args, **kwargs)" in code:
+            wrapped_count += 1
+        # heuristic: if output starts with prompt signature/docstring, we likely fell back
+        if code.startswith(IMPORT_PKG) and prompt.strip() in code:
+            prompt_fallback_count += 1
         samples[str(pid)] = [code]
 
     out = Path(args.output)
@@ -97,6 +176,8 @@ def main() -> None:
     print(f"Saved {len(samples)} tasks -> {out}")
     if missing_completion:
         print(f"Warning: {missing_completion} rows had empty completion text.")
+    print(f"Wrapped with entry-point adapters: {wrapped_count}")
+    print(f"Prompt-fallback heuristic count: {prompt_fallback_count}")
 
 
 if __name__ == "__main__":
