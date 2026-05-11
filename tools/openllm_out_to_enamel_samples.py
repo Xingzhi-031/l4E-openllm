@@ -37,7 +37,7 @@ def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
     target_def = f"def {entry_point}("
 
     if target_def in code:
-        normalized = code[code.find(target_def) :].strip()
+        normalized = code[code.rfind(target_def) :].strip()
     else:
         body = textwrap.dedent(code).strip("\n")
         indented = "\n".join(("    " + ln) if ln.strip() else "" for ln in body.splitlines())
@@ -57,12 +57,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--input",
-        default="/content/CLS/enamel_openllm_output.json",
+        default="enamel_openllm_output.json",
         help="Input JSON path produced by tools/open_llm_generation.py",
     )
     parser.add_argument(
         "--output",
-        default="/content/enacls/samples/l4e-qwen25-7b-instruct-enamel.json",
+        default="l4e-qwen25-7b-instruct-enamel.json",
         help="Output ENAMEL samples json path.",
     )
     parser.add_argument(
