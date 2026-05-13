@@ -75,10 +75,77 @@ def _is_doc_or_pass_only(fn: ast.FunctionDef) -> bool:
     return all(isinstance(node, ast.Pass) for node in body)
 
 
+def _extract_def_blocks(text: str) -> list[str]:
+    lines = text.splitlines()
+    blocks: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if re.match(r"^\s*def\s+[A-Za-z_]\w*\s*\(", line):
+            start = i
+            i += 1
+            while i < len(lines):
+                cur = lines[i]
+                # Next top-level function starts a new block.
+                if re.match(r"^\s*def\s+[A-Za-z_]\w*\s*\(", cur):
+                    break
+                # Hard stops for common non-code tails.
+                if cur.strip().startswith(("```", "# Examples", "# Test", "if __name__")):
+                    break
+                i += 1
+            blocks.append("\n".join(lines[start:i]).strip())
+        else:
+            i += 1
+    return [b for b in blocks if b]
+
+
+def _choose_best_function_from_blocks(blocks: list[str], entry_point: str) -> tuple[str, bool]:
+    funcs: list[ast.FunctionDef] = []
+    for block in blocks:
+        try:
+            tree = ast.parse(block)
+        except Exception:
+            continue
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                funcs.append(node)
+    if not funcs:
+        return "", False
+
+    target_funcs = [fn for fn in funcs if fn.name == entry_point]
+    if target_funcs:
+        best_target = max(target_funcs, key=_function_score)
+        if _function_score(best_target) > 0 and not _is_doc_or_pass_only(best_target):
+            return ast.unparse(best_target).strip(), False
+
+    nontrivial = [fn for fn in funcs if _function_score(fn) > 0 and not _is_doc_or_pass_only(fn)]
+    if not nontrivial:
+        # Last resort: keep best target even if weak.
+        if target_funcs:
+            best_target = max(target_funcs, key=_function_score)
+            return ast.unparse(best_target).strip(), False
+        best_any = max(funcs, key=_function_score)
+        return ast.unparse(best_any).strip(), best_any.name != entry_point
+
+    best_fn = max(nontrivial, key=_function_score)
+    best_src = ast.unparse(best_fn).strip()
+    if best_fn.name == entry_point:
+        return best_src, False
+    wrapper = (
+        f"\n\ndef {entry_point}(*args, **kwargs):\n"
+        f"    return {best_fn.name}(*args, **kwargs)\n"
+    )
+    return (best_src + wrapper).strip(), True
+
+
 def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
     completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
+    prompt_clean = prompt.rstrip("\n")
+    # Some models echo the full prompt again; strip that prefix first.
+    if completion.strip().startswith(prompt_clean.strip()):
+        completion = completion.strip()[len(prompt_clean.strip()) :].lstrip()
     code = extract_code_block(completion)
-    prompt = prompt.rstrip("\n")
+    prompt = prompt_clean
     target_def = f"def {entry_point}("
 
     normalized = ""
@@ -128,6 +195,15 @@ def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
             wrapped = True
     except Exception:
         normalized = ""
+
+    if not normalized:
+        # If whole text is unparsable, salvage individual def blocks.
+        best_from_blocks, wrapped_from_blocks = _choose_best_function_from_blocks(
+            _extract_def_blocks(code), entry_point
+        )
+        if best_from_blocks:
+            normalized = best_from_blocks
+            wrapped = wrapped or wrapped_from_blocks
 
     if not normalized:
         if target_def in code:
