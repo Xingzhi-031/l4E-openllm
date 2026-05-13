@@ -21,10 +21,10 @@ import string, re, math, random, itertools, functools
 
 
 def extract_code_block(text: str) -> str:
-    matches = re.findall(r"```python\\s*(.*?)```", text, flags=re.DOTALL)
+    matches = re.findall(r"```python\s*(.*?)```", text, flags=re.DOTALL)
     if matches:
         return matches[-1].strip()
-    matches = re.findall(r"```\\s*(.*?)```", text, flags=re.DOTALL)
+    matches = re.findall(r"```\s*(.*?)```", text, flags=re.DOTALL)
     if matches:
         return matches[-1].strip()
     return text.strip()
