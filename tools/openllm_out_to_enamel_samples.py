@@ -75,6 +75,28 @@ def _is_doc_or_pass_only(fn: ast.FunctionDef) -> bool:
     return all(isinstance(node, ast.Pass) for node in body)
 
 
+def _extract_function_by_indent(code: str, target_name: str) -> str:
+    """Slice the target function block by indentation, ignoring trailing prose."""
+    needle = f"def {target_name}("
+    idx = code.rfind(needle)
+    if idx < 0:
+        return ""
+    lines = code[idx:].splitlines()
+    if not lines:
+        return ""
+    kept = [lines[0]]
+    for line in lines[1:]:
+        if not line.strip():
+            kept.append(line)
+            continue
+        if not line.startswith((" ", "\t")):
+            break
+        kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    return "\n".join(kept)
+
+
 def _extract_def_blocks(text: str) -> list[str]:
     lines = text.splitlines()
     blocks: list[str] = []
@@ -165,9 +187,6 @@ def _normalize_body_to_prompt(prompt: str, body_text: str) -> str:
 def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
     completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
     prompt_clean = prompt.rstrip("\n")
-    # Some models echo the full prompt again; strip that prefix first.
-    if completion.strip().startswith(prompt_clean.strip()):
-        completion = completion.strip()[len(prompt_clean.strip()) :].lstrip()
     code = extract_code_block(completion)
     prompt = prompt_clean
     target_def = f"def {entry_point}("
@@ -228,6 +247,18 @@ def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
         if best_from_blocks:
             normalized = best_from_blocks
             wrapped = wrapped or wrapped_from_blocks
+
+    if not normalized:
+        salvaged = _extract_function_by_indent(code, entry_point)
+        if salvaged:
+            try:
+                tree2 = ast.parse(salvaged)
+                tgt = [n for n in tree2.body if isinstance(n, ast.FunctionDef) and n.name == entry_point
+                       and _function_score(n) > 0 and not _is_doc_or_pass_only(n)]
+                if tgt:
+                    normalized = ast.unparse(tgt[0]).strip()
+            except Exception:
+                pass
 
     if not normalized:
         if target_def in code:
