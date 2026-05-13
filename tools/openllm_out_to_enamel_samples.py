@@ -68,6 +68,13 @@ def _function_score(fn: ast.FunctionDef) -> int:
     return score
 
 
+def _is_doc_or_pass_only(fn: ast.FunctionDef) -> bool:
+    body = _strip_docstring_body(fn.body[:])
+    if not body:
+        return True
+    return all(isinstance(node, ast.Pass) for node in body)
+
+
 def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
     completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
     code = extract_code_block(completion)
@@ -84,7 +91,30 @@ def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
 
         if target_funcs:
             best_target = max(target_funcs, key=_function_score)
-            normalized = ast.unparse(best_target).strip()
+            best_target_score = _function_score(best_target)
+            if best_target_score > 0 and not _is_doc_or_pass_only(best_target):
+                normalized = ast.unparse(best_target).strip()
+            else:
+                # If the target function is docstring/pass-only, salvage the
+                # strongest non-trivial function from the same completion.
+                nontrivial = [
+                    fn for fn in funcs if _function_score(fn) > 0 and not _is_doc_or_pass_only(fn)
+                ]
+                if nontrivial:
+                    best_fn = max(nontrivial, key=_function_score)
+                    best_name = best_fn.name
+                    best_src = ast.unparse(best_fn).strip()
+                    if best_name == entry_point:
+                        normalized = best_src
+                    else:
+                        wrapper = (
+                            f"\n\ndef {entry_point}(*args, **kwargs):\n"
+                            f"    return {best_name}(*args, **kwargs)\n"
+                        )
+                        normalized = (best_src + wrapper).strip()
+                        wrapped = True
+                else:
+                    normalized = ast.unparse(best_target).strip()
         elif funcs:
             # Keep the strongest function and add wrapper to expected entry point.
             best_fn = max(funcs, key=_function_score)
