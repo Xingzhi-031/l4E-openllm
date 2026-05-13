@@ -138,6 +138,30 @@ def _choose_best_function_from_blocks(blocks: list[str], entry_point: str) -> tu
     return (best_src + wrapper).strip(), True
 
 
+def _trim_target_function_block(code: str, entry_point: str) -> str:
+    pattern = re.compile(rf"^\s*def\s+{re.escape(entry_point)}\s*\(", flags=re.M)
+    match = pattern.search(code)
+    if not match:
+        return ""
+    lines = code[match.start() :].splitlines()
+    kept: list[str] = []
+    for i, ln in enumerate(lines):
+        if i > 0 and re.match(r"^\s*def\s+[A-Za-z_]\w*\s*\(", ln):
+            break
+        if ln.strip().startswith(("```", "# Examples", "# Test", "if __name__")):
+            break
+        kept.append(ln)
+    return "\n".join(kept).strip()
+
+
+def _normalize_body_to_prompt(prompt: str, body_text: str) -> str:
+    body = textwrap.dedent(body_text).strip("\n")
+    if not body:
+        return prompt
+    indented = "\n".join(("    " + ln) if ln.strip() else "" for ln in body.splitlines())
+    return prompt if not indented else (prompt + "\n" + indented)
+
+
 def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
     completion = re.sub(r"<think>.*?</think>", "", completion, flags=re.DOTALL)
     prompt_clean = prompt.rstrip("\n")
@@ -207,28 +231,46 @@ def normalize_solution(prompt: str, entry_point: str, completion: str) -> str:
 
     if not normalized:
         if target_def in code:
-            normalized = code[code.rfind(target_def) :].strip()
+            normalized = _trim_target_function_block(code, entry_point)
         elif re.search(r"^\s*def\s+[A-Za-z_]\w*\s*\(", code, flags=re.M):
             normalized = code.strip()
         else:
-            body = textwrap.dedent(code).strip("\n")
-            indented = "\n".join(("    " + ln) if ln.strip() else "" for ln in body.splitlines())
-            normalized = prompt if not indented else (prompt + "\n" + indented)
+            normalized = _normalize_body_to_prompt(prompt, code)
 
     if wrapped:
         # keep marker for debug (no side effect on execution)
         normalized = normalized + "\n"
 
     if not normalized:
-        body = textwrap.dedent(code).strip("\n")
-        indented = "\n".join(("    " + ln) if ln.strip() else "" for ln in body.splitlines())
-        normalized = prompt if not indented else (prompt + "\n" + indented)
+        normalized = _normalize_body_to_prompt(prompt, code)
 
     full = IMPORT_PKG + "\n" + normalized.strip() + "\n"
     try:
         ast.parse(full)
     except SyntaxError:
-        full = IMPORT_PKG + "\n" + prompt.strip() + "\n"
+        # Last salvage: try extracting a cleaner function block before giving up.
+        trimmed = _trim_target_function_block(code, entry_point)
+        if trimmed:
+            retry = IMPORT_PKG + "\n" + trimmed.strip() + "\n"
+            try:
+                ast.parse(retry)
+                full = retry
+            except SyntaxError:
+                body_retry = _normalize_body_to_prompt(prompt, code)
+                retry2 = IMPORT_PKG + "\n" + body_retry.strip() + "\n"
+                try:
+                    ast.parse(retry2)
+                    full = retry2
+                except SyntaxError:
+                    full = IMPORT_PKG + "\n" + prompt.strip() + "\n"
+        else:
+            body_retry = _normalize_body_to_prompt(prompt, code)
+            retry2 = IMPORT_PKG + "\n" + body_retry.strip() + "\n"
+            try:
+                ast.parse(retry2)
+                full = retry2
+            except SyntaxError:
+                full = IMPORT_PKG + "\n" + prompt.strip() + "\n"
     return full
 
 
